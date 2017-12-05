@@ -4,7 +4,7 @@
 // Created          : 02-18-2017
 //
 // Last Modified By : RFTD
-// Last Modified On : 02-18-2017
+// Last Modified On : 05-08-2017
 // ***********************************************************************
 // <copyright file="ACBrIBGE.cs" company="ACBr.Net">
 //		        		   The MIT License (MIT)
@@ -31,24 +31,23 @@
 
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Drawing;
+using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
 using ACBr.Net.Core;
 using ACBr.Net.Core.Exceptions;
 using ACBr.Net.Core.Extensions;
 
-namespace ACBr.Net.Consulta
+namespace ACBr.Net.Consulta.IBGE
 {
 	/// <summary>
 	/// Class ACBrIBGE. This class cannot be inherited.
 	/// </summary>
-	/// <seealso cref="ACBr.Net.Consulta.ACBrConsultaBase" />
-	[ToolboxBitmap(typeof(ACBrIBGE), "ACBrIBGE")]
-	public sealed class ACBrIBGE : ACBrConsultaBase, IDisposable
+	/// <seealso cref="ACBrComponentConsulta" />
+	[ToolboxBitmap(typeof(ACBrIBGE), "ACBr.Net.Consulta.ACBrIBGE.bmp")]
+	public sealed class ACBrIBGE : ACBrComponentConsulta
 	{
 		#region Fields
 
@@ -64,6 +63,9 @@ namespace ACBr.Net.Consulta
 
 		#region Properties
 
+		/// <summary>
+		/// Resultado da busca
+		/// </summary>
 		public List<ACBrMunicipio> Resultados { get; private set; }
 
 		#endregion Properties
@@ -80,7 +82,12 @@ namespace ACBr.Net.Consulta
 			Guard.Against<ArgumentException>(codigo < 1, "Código do Município deve ser informado");
 
 			var request = GetClient($"{CIBGE_URL}?codigo={codigo}");
-			var retorno = GetHtmlResponse(request.GetResponse());
+			var responseStream = request.GetResponse().GetResponseStream();
+			Guard.Against<ACBrException>(responseStream == null, "Erro ao acessar o site.");
+
+			string retorno;
+			using (var stHtml = new StreamReader(responseStream, ACBrEncoding.ISO88591))
+				retorno = stHtml.ReadToEnd();
 
 			ProcessarResposta(retorno);
 
@@ -97,26 +104,32 @@ namespace ACBr.Net.Consulta
 		/// <param name="exata">if set to <c>true</c> [exata].</param>
 		/// <param name="caseSentive">if set to <c>true</c> [case sentive].</param>
 		/// <returns>System.Int32.</returns>
-		public int BuscarPorNome(string municipio, string uf = "", bool exata = false, bool caseSentive = false)
+		public int BuscarPorNome(string municipio, ConsultaUF? uf = null, bool exata = false, bool caseSentive = false)
 		{
 			Guard.Against<ArgumentException>(municipio.IsEmpty(), "Município deve ser informado");
 
-			var request = GetClient($"{CIBGE_URL}?nome={HttpUtility.UrlEncode(municipio.Trim(), Encoding.GetEncoding("ISO-8859-1"))}");
-			var retorno = GetHtmlResponse(request.GetResponse());
+			var request = GetClient($"{CIBGE_URL}?nome={HttpUtility.UrlEncode(municipio.Trim(), ACBrEncoding.ISO88591)}");
+
+			var responseStream = request.GetResponse().GetResponseStream();
+			Guard.Against<ACBrException>(responseStream.IsNull(), "Erro ao acessar o site.");
+
+			string retorno;
+			using (var stHtml = new StreamReader(responseStream, ACBrEncoding.ISO88591))
+				retorno = stHtml.ReadToEnd();
 
 			ProcessarResposta(retorno);
 
-			if (!uf.IsEmpty())
+			if (uf.HasValue)
 			{
-				Resultados.RemoveAll(x => x.UF != uf.ToUpper());
+				Resultados.RemoveAll(x => x.UF != uf);
 			}
 
 			if (exata)
 			{
 				if (caseSentive)
-					Resultados.RemoveAll(x => x.Nome.ToUpper().RemoveAccent() != municipio.ToUpper().RemoveAccent());
-				else
 					Resultados.RemoveAll(x => x.Nome.RemoveAccent() != municipio.RemoveAccent());
+				else
+					Resultados.RemoveAll(x => x.Nome.ToUpper().RemoveAccent() != municipio.ToUpper().RemoveAccent());
 			}
 
 			var result = Resultados.Count;
@@ -137,7 +150,7 @@ namespace ACBr.Net.Consulta
 				if (pos <= 0) return;
 
 				buffer = buffer.Substring(pos, buffer.Length - pos);
-				buffer = buffer.StringEntreString("<table ", "</table>");
+				buffer = buffer.GetStrBetween("<table ", "</table>");
 
 				var rows = Regex.Matches(buffer, @"(?<1><TR[^>]*>\s*<td.*?</tr>)", RegexOptions.Singleline | RegexOptions.IgnoreCase)
 								.Cast<Match>()
@@ -156,7 +169,7 @@ namespace ACBr.Net.Consulta
 					var municipio = new ACBrMunicipio
 					{
 						CodigoUF = columns[0].ToInt32(),
-						UF = columns[1].ToUpper(),
+						UF = (ConsultaUF)Enum.Parse(typeof(ConsultaUF), columns[1].ToUpper()),
 						Codigo = columns[2].ToInt32(),
 						Nome = columns[3].ToTitleCase(),
 						Area = columns[4].ToDecimal()
@@ -175,8 +188,10 @@ namespace ACBr.Net.Consulta
 
 		#region Protected Method
 
+		/// <inheritdoc />
 		protected override void OnInitialize()
 		{
+			base.OnInitialize();
 			Resultados = new List<ACBrMunicipio>();
 		}
 
